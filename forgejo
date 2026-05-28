@@ -385,6 +385,9 @@ PR commands:
   pr edit <owner/repo> <number> [--title=X] [--body=X] [--base=X]   Edit PR
   pr ready <owner/repo> <number>                        Mark draft PR ready
   pr comment <owner/repo> <number> --body=X             Comment on PR
+  pr comment list <owner/repo> <number>                List PR comments
+  pr comment view <owner/repo> <comment_id>            View a single comment
+  pr comment delete <owner/repo> <comment_id>          Delete a comment
   pr diff <owner/repo> <number>                         Raw unified diff
   pr files <owner/repo> <number>                        Changed file list
   pr checks <owner/repo> <number>                       Commit statuses + Actions runs
@@ -3576,6 +3579,23 @@ pr_ready() {
 }
 
 pr_comment() {
+    if [[ $# -eq 0 ]]; then
+        echo "Usage: forgejo pr comment <owner/repo> <number> --body=X" >&2
+        echo "       forgejo pr comment list <owner/repo> <number>" >&2
+        echo "       forgejo pr comment view <owner/repo> <comment_id>" >&2
+        echo "       forgejo pr comment delete <owner/repo> <comment_id>" >&2
+        exit 1
+    fi
+
+    case "$1" in
+        list)   shift; pr_comment_list "$@" ;;
+        view)   shift; pr_comment_view "$@" ;;
+        delete) shift; pr_comment_delete "$@" ;;
+        *)      pr_comment_create "$@" ;;
+    esac
+}
+
+pr_comment_create() {
     if [[ $# -lt 2 ]]; then
         echo "Usage: forgejo pr comment <owner/repo> <number> --body=X" >&2
         exit 1
@@ -3598,6 +3618,74 @@ pr_comment() {
     else
         echo "Comment added to PR #$number"
     fi
+}
+
+pr_comment_list() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: forgejo pr comment list <owner/repo> <number>" >&2
+        exit 1
+    fi
+    local repo="$1"
+    local number="$2"
+
+    local result
+    result=$(api_call GET "repos/$repo/issues/$number/comments")
+
+    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+        echo "$result" | jq .
+    else
+        if echo "$result" | jq -e 'length == 0' > /dev/null 2>&1; then
+            echo "No comments."
+        else
+            echo "$result" | jq -r '
+                ["ID","AUTHOR","CREATED","UPDATED","BODY"],
+                (.[] | [
+                    (.id|tostring),
+                    .user.login,
+                    .created_at[:10],
+                    .updated_at[:10],
+                    ((.body // "") | split("\n")[0])[:60]
+                ])
+                | @tsv
+            ' | column -t -s $'\t'
+        fi
+    fi
+}
+
+pr_comment_view() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: forgejo pr comment view <owner/repo> <comment_id>" >&2
+        exit 1
+    fi
+    local repo="$1"
+    local comment_id="$2"
+
+    local result
+    result=$(api_call GET "repos/$repo/issues/comments/$comment_id")
+
+    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+        echo "$result" | jq .
+    else
+        echo "$result" | jq -r '
+            "ID:       \(.id)",
+            "Author:   \(.user.login)",
+            "Created:  \(.created_at)",
+            "Updated:  \(.updated_at)",
+            "",
+            .body
+        '
+    fi
+}
+
+pr_comment_delete() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: forgejo pr comment delete <owner/repo> <comment_id>" >&2
+        exit 1
+    fi
+    local repo="$1"
+    local comment_id="$2"
+    api_call DELETE "repos/$repo/issues/comments/$comment_id" > /dev/null
+    echo "Deleted comment #$comment_id"
 }
 
 pr_files() {
