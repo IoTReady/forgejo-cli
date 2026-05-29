@@ -281,6 +281,38 @@ show_usage() {
     cat << 'USAGE'
 Usage: forgejo <resource> <action> [args] [--json]
 
+=== QUICK START ===
+
+  # Issues — create, comment, label, close
+  forgejo issue create OWNER/REPO --title="Bug: login broken" --body="Steps to reproduce..."
+  forgejo issue comment OWNER/REPO 42 --body="I can reproduce this."
+  forgejo issue view OWNER/REPO 42                         # shows issue + all comments
+  forgejo issue comment delete OWNER/REPO 123              # delete comment #123
+  forgejo issue close OWNER/REPO 42
+
+  # PRs — create, comment, review, merge
+  forgejo pr create OWNER/REPO --title="Fix login" --head=feature/login --base=main
+  forgejo pr comment OWNER/REPO 17 --body="LGTM, ship it!"
+  forgejo pr comment list OWNER/REPO 17                    # list all comments on PR
+  forgejo pr comment view OWNER/REPO 456                   # view a single comment
+  forgejo pr comment delete OWNER/REPO 456                 # delete a comment
+  forgejo pr review OWNER/REPO 17 --approve
+  forgejo pr merge OWNER/REPO 17 --method=squash
+
+  # Repos & branches
+  forgejo repo list OWNER
+  forgejo repo view OWNER/REPO
+  forgejo branch protect OWNER/REPO main --no-push --merge-whitelist=you
+
+  Run `forgejo <resource> --help` for detailed help on a specific resource.
+  Run `forgejo <resource> <subcommand> --help` for subcommand-specific help (e.g. comments).
+
+Global flags:
+  --json   Output raw JSON instead of formatted columns
+  --help   Show help (works at any level: resource, subcommand)
+
+=== FULL COMMAND LIST ===
+
 Resources:
   api      Generic API passthrough (escape hatch)
   branch   Manage branches and branch protection
@@ -295,10 +327,6 @@ Resources:
   auth         Log in and check authentication status
   notification Notification inbox
   search       Search across the instance
-
-Global flags:
-  --json   Output raw JSON instead of formatted columns
-  --help   Show this help
 
 API commands:
   api [METHOD] <path> [-f key=val]... [-F key=val]... [--input -]
@@ -475,11 +503,228 @@ Search commands:
 USAGE
 }
 
+
+# --- RESOURCE-SPECIFIC HELP FUNCTIONS ---
+
+show_issue_help() {
+    cat << 'ISSUE_HELP'
+Issue commands:
+
+  issue list <owner/repo> [--state=open|closed]
+      List issues in a repository.
+
+  issue create <owner/repo> --title=TEXT [--body=TEXT]
+      Create a new issue.
+
+  issue view <owner/repo> <number>
+      Show issue details and all comments inline.
+
+  issue edit <owner/repo> <number> [--title=TEXT] [--state=open|closed] [--body=TEXT] [--labels=X,Y]
+      Edit an issue's title, state, body, or labels.
+
+  issue comment <owner/repo> <number> --body=TEXT
+      Add a comment to an issue.
+      Comment IDs are shown in `issue view` and in the API response (--json).
+
+  issue comment delete <owner/repo> <comment_id>
+      Delete a specific comment by its numeric ID.
+
+  There is NO separate `issue comment list` or `issue comment view` —
+  use `forgejo issue view <owner/repo> <number>` which shows all comments inline.
+
+  issue close <owner/repo> <number>
+      Close an issue.
+
+  issue reopen <owner/repo> <number>
+      Reopen a closed issue.
+
+  issue assign <owner/repo> <number> --users=u1,u2
+      Add assignees to an issue (union with existing).
+
+  issue unassign <owner/repo> <number> --users=u1,u2
+      Remove assignees from an issue.
+
+  issue search [--owner=ORG] [--state=open|closed|all] [--labels=a,b] [--query=TEXT] [--limit=N]
+      Search issues across repositories.
+
+  issue milestone list <owner/repo> [--state=open|closed|all]
+  issue milestone create <owner/repo> --title=TEXT [--description=TEXT] [--due=YYYY-MM-DD]
+  issue milestone edit <owner/repo> <id> [--title=TEXT] [--description=TEXT] [--due=YYYY-MM-DD] [--state=open|closed]
+  issue milestone delete <owner/repo> <id>
+  issue milestone set <owner/repo> <number> --milestone=<id|title>
+      Manage milestones. Pass --milestone=0 to clear.
+
+  issue label <owner/repo> list [--scope=org|repo]
+      List labels (scope defaults to org).
+
+  issue label <owner/repo> create --name=TEXT [--color=HEX] [--desc=TEXT] [--scope=org|repo]
+      Create a label.
+
+  issue label <owner/repo> add <number> --labels=X,Y
+      Add labels to an issue.
+
+  issue label <owner/repo> remove <number> --label=TEXT
+      Remove a single label from an issue.
+
+EXAMPLES:
+  forgejo issue create myorg/myrepo --title="Fix auth" --body="The OAuth flow is broken."
+  forgejo issue comment myorg/myrepo 42 --body="I can reproduce this on staging."
+  forgejo issue view myorg/myrepo 42           # shows issue + all comments
+  forgejo issue comment delete myorg/myrepo 123
+  forgejo issue label myorg/myrepo add 42 --labels=bug,high-priority
+  forgejo issue assign myorg/myrepo 42 --users=alice,bob
+  forgejo issue close myorg/myrepo 42
+
+Run `forgejo issue comment --help` for comment-specific help.
+
+ISSUE_HELP
+}
+
+
+show_issue_comment_help() {
+    cat << 'CMT_HELP'
+Issue comment commands:
+  forgejo issue comment <owner/repo> <number> --body=TEXT
+      Add a comment to an issue or PR.
+      The <number> is the issue number (e.g., #42).
+
+  forgejo issue comment delete <owner/repo> <comment_id>
+      Delete a comment by its numeric comment ID.
+      Find the comment ID from `forgejo issue view <owner/repo> <number>`
+      (shown as `[comment #123]`) or use --json for raw API output.
+
+IMPORTANT NOTES:
+  - There is NO `issue comment list` or `issue comment view` subcommand.
+    To see all comments on an issue, use:  forgejo issue view <owner/repo> <number>
+  - Issue and PR comments share the same API backend; comment IDs are globally
+    unique within a repo across both issues and PRs.
+  - `issue comment` on a PR number also works (comments on the PR thread).
+
+EXAMPLES:
+  forgejo issue comment myorg/myrepo 42 --body="I can reproduce this."
+  forgejo issue view myorg/myrepo 42           # view issue with all comments
+  forgejo issue comment delete myorg/myrepo 789  # delete comment #789
+
+CMT_HELP
+}
+
+
+show_pr_help() {
+    cat << 'PR_HELP'
+Pull request commands:
+
+  pr list <owner/repo> [--state=open|closed|all]
+      List pull requests.
+
+  pr create <owner/repo> --title=TEXT --head=BRANCH [--base=main] [--body=TEXT]
+      Create a new PR.
+
+  pr view <owner/repo> <number>
+      View PR details with review summaries.
+
+  pr merge <owner/repo> <number> [--method=merge|rebase|squash]
+      Merge a PR.
+
+  pr close <owner/repo> <number>
+      Close a PR without merging.
+
+  pr edit <owner/repo> <number> [--title=TEXT] [--body=TEXT] [--base=BRANCH]
+      Edit a PR's title, body, or base branch.
+
+  pr ready <owner/repo> <number>
+      Mark a draft PR as ready for review.
+
+  pr comment <owner/repo> <number> --body=TEXT
+      Add a comment to a PR thread.
+
+  pr comment list <owner/repo> <number>
+      List all comments on a PR. Shows ID, author, date, and body preview.
+
+  pr comment view <owner/repo> <comment_id>
+      View a single comment by its numeric ID.
+
+  pr comment delete <owner/repo> <comment_id>
+      Delete a comment by its numeric ID.
+
+  pr diff <owner/repo> <number>
+      Show the raw unified diff for a PR.
+
+  pr files <owner/repo> <number>
+      List changed files with additions/deletions.
+
+  pr checks <owner/repo> <number>
+      Show commit statuses and Actions CI runs for the PR's head commit.
+
+  pr review <owner/repo> <number> --approve|--request-changes|--comment [--body=TEXT]
+      Submit a PR review. Exactly one of --approve, --request-changes, --comment
+      is required. --body is required with --request-changes and --comment.
+
+  pr review list <owner/repo> <number>
+      List all reviews on a PR.
+
+  pr review dismiss <owner/repo> <number> <review_id> --message=TEXT
+      Dismiss a previous review by its ID.
+
+  pr requested-reviewers add <owner/repo> <number> --users=u1,u2
+      Request specific users to review the PR.
+
+  pr requested-reviewers remove <owner/repo> <number> --users=u1,u2
+      Withdraw reviewer requests.
+
+EXAMPLES:
+  forgejo pr create myorg/myrepo --title="Fix login" --head=feature/login
+  forgejo pr comment myorg/myrepo 17 --body="LGTM, ship it!"
+  forgejo pr comment list myorg/myrepo 17
+  forgejo pr comment view myorg/myrepo 456
+  forgejo pr comment delete myorg/myrepo 456
+  forgejo pr review myorg/myrepo 17 --approve
+  forgejo pr review myorg/myrepo 17 --request-changes --body="Please add tests."
+  forgejo pr merge myorg/myrepo 17 --method=squash
+
+Run `forgejo pr comment --help` for comment-specific help.
+
+PR_HELP
+}
+
+
+show_pr_comment_help() {
+    cat << 'PCMT_HELP'
+PR comment commands:
+  forgejo pr comment <owner/repo> <number> --body=TEXT
+      Add a comment to a PR thread.
+      The <number> is the PR number (e.g., #17).
+
+  forgejo pr comment list <owner/repo> <number>
+      List all comments on a PR with ID, author, date, and body preview.
+
+  forgejo pr comment view <owner/repo> <comment_id>
+      View a single comment's full body by its numeric comment ID.
+
+  forgejo pr comment delete <owner/repo> <comment_id>
+      Delete a comment by its numeric comment ID.
+
+IMPORTANT NOTES:
+  - For issues, comments are shown inline via `forgejo issue view <owner/repo> <number>`.
+    There is no separate `issue comment list` subcommand.
+  - PR comments have full list/view/delete support (unlike issue comments).
+  - Comment IDs are numeric and globally unique within a repo across both
+    issues and PRs.
+
+EXAMPLES:
+  forgejo pr comment myorg/myrepo 17 --body="LGTM!"
+  forgejo pr comment list myorg/myrepo 17      # list all comments on PR #17
+  forgejo pr comment view myorg/myrepo 456     # view comment #456 in full
+  forgejo pr comment delete myorg/myrepo 456   # delete comment #456
+
+PCMT_HELP
+}
+
 # --- RESOURCE COMMANDS (stubs for now) ---
 
 cmd_repo() {
-    if [[ $# -eq 0 ]]; then
+    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
         echo "Usage: forgejo repo <list|create|view|edit|delete|fork|transfer|archive|unarchive|tags|collaborator|webhook|key|topic|mirror> [args]" >&2
+        echo "Run 'forgejo --help' for the full command reference." >&2
         exit 1
     fi
 
@@ -1240,9 +1485,9 @@ repo_mirror_sync() {
 }
 
 cmd_issue() {
-    if [[ $# -eq 0 ]]; then
-        echo "Usage: forgejo issue <list|create|view|edit|comment|label|close|reopen|assign|unassign|search|milestone> [args]" >&2
-        exit 1
+    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+        show_issue_help
+        exit 0
     fi
 
     local action="$1"
@@ -1407,10 +1652,9 @@ issue_edit() {
 }
 
 issue_comment() {
-    if [[ $# -lt 2 ]]; then
-        echo "Usage: forgejo issue comment <owner/repo> <number> --body=X" >&2
-        echo "       forgejo issue comment delete <owner/repo> <comment_id>" >&2
-        exit 1
+    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+        show_issue_comment_help
+        exit 0
     fi
 
     # Handle: forgejo issue comment delete <owner/repo> <comment_id>
@@ -1814,16 +2058,35 @@ issue_search() {
 }
 
 issue_milestone() {
-    if [[ $# -eq 0 ]]; then
-        echo "Usage: forgejo issue milestone <action> [args]" >&2
-        echo "" >&2
-        echo "Actions:" >&2
-        echo "  list <owner/repo> [--state=open|closed|all]" >&2
-        echo "  create <owner/repo> --title=X [--description=X] [--due=YYYY-MM-DD]" >&2
-        echo "  edit <owner/repo> <id> [--title=X] [--description=X] [--due=YYYY-MM-DD] [--state=open|closed]" >&2
-        echo "  delete <owner/repo> <id>" >&2
-        echo "  set <owner/repo> <number> --milestone=<id|title>" >&2
-        exit 1
+    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+        cat << 'MILESTONE_HELP'
+Milestone commands:
+  forgejo issue milestone list <owner/repo> [--state=open|closed|all]
+      List milestones in a repository.
+
+  forgejo issue milestone create <owner/repo> --title=TEXT [--description=TEXT] [--due=YYYY-MM-DD]
+      Create a new milestone.
+
+  forgejo issue milestone edit <owner/repo> <id> [--title=TEXT] [--description=TEXT] [--due=YYYY-MM-DD] [--state=open|closed]
+      Edit a milestone. <id> can be the numeric milestone ID.
+
+  forgejo issue milestone delete <owner/repo> <id>
+      Delete a milestone by its numeric ID.
+
+  forgejo issue milestone set <owner/repo> <number> --milestone=<id|title>
+      Set a milestone on an issue. Pass --milestone=0 to clear the milestone.
+      <id|title> accepts either the numeric ID or exact title of the milestone.
+
+EXAMPLES:
+  forgejo issue milestone list myorg/myrepo
+  forgejo issue milestone create myorg/myrepo --title="v2.0" --due=2026-06-30
+  forgejo issue milestone edit myorg/myrepo 3 --state=closed
+  forgejo issue milestone delete myorg/myrepo 3
+  forgejo issue milestone set myorg/myrepo 42 --milestone=v2.0
+  forgejo issue milestone set myorg/myrepo 42 --milestone=0    # clear milestone
+
+MILESTONE_HELP
+        exit 0
     fi
 
     local action="$1"
@@ -3356,9 +3619,9 @@ actions_variable_delete() {
 # --- PR COMMANDS ---
 
 cmd_pr() {
-    if [[ $# -eq 0 ]]; then
-        echo "Usage: forgejo pr <list|create|view|merge|close|edit|ready|comment|diff|files|checks|review|requested-reviewers> [args]" >&2
-        exit 1
+    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+        show_pr_help
+        exit 0
     fi
 
     local action="$1"
@@ -3580,12 +3843,9 @@ pr_ready() {
 }
 
 pr_comment() {
-    if [[ $# -eq 0 ]]; then
-        echo "Usage: forgejo pr comment <owner/repo> <number> --body=X" >&2
-        echo "       forgejo pr comment list <owner/repo> <number>" >&2
-        echo "       forgejo pr comment view <owner/repo> <comment_id>" >&2
-        echo "       forgejo pr comment delete <owner/repo> <comment_id>" >&2
-        exit 1
+    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+        show_pr_comment_help
+        exit 0
     fi
 
     case "$1" in
@@ -3775,11 +4035,36 @@ pr_checks() {
 }
 
 pr_review() {
-    if [[ $# -eq 0 ]]; then
-        echo "Usage: forgejo pr review <owner/repo> <number> --approve|--request-changes|--comment [--body=X]" >&2
-        echo "       forgejo pr review list <owner/repo> <number>" >&2
-        echo "       forgejo pr review dismiss <owner/repo> <number> <review_id> --message=X" >&2
-        exit 1
+    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+        cat << 'REVIEW_HELP'
+PR review commands:
+  forgejo pr review <owner/repo> <number> --approve [--body=TEXT]
+      Approve a PR. --body is optional for approvals.
+
+  forgejo pr review <owner/repo> <number> --request-changes --body=TEXT
+      Request changes on a PR. --body is REQUIRED.
+
+  forgejo pr review <owner/repo> <number> --comment --body=TEXT
+      Leave a general review comment. --body is REQUIRED.
+
+  forgejo pr review list <owner/repo> <number>
+      List all reviews on a PR (ID, user, state, date).
+
+  forgejo pr review dismiss <owner/repo> <number> <review_id> --message=TEXT
+      Dismiss a previous review by its ID. --message is REQUIRED.
+
+Exactly one of --approve, --request-changes, --comment is required.
+The flags are mutually exclusive.
+
+EXAMPLES:
+  forgejo pr review myorg/myrepo 17 --approve
+  forgejo pr review myorg/myrepo 17 --request-changes --body="Please add tests."
+  forgejo pr review myorg/myrepo 17 --comment --body="One nit: rename the variable."
+  forgejo pr review list myorg/myrepo 17
+  forgejo pr review dismiss myorg/myrepo 17 42 --message="Stale review"
+
+REVIEW_HELP
+        exit 0
     fi
 
     case "$1" in
@@ -4458,9 +4743,10 @@ cmd_api() {
 # --- BRANCH COMMANDS ---
 
 cmd_branch() {
-    if [[ $# -eq 0 ]]; then
+    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
         echo "Usage: forgejo branch <action> [args]" >&2
         echo "Actions: list, view, delete, protect, unprotect" >&2
+        echo "Run 'forgejo --help' for the full command reference." >&2
         exit 1
     fi
     local action="$1"; shift
@@ -5290,6 +5576,16 @@ set -- "${args[@]+"${args[@]}"}"
 
 if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
     show_usage
+    exit 0
+fi
+
+# Handle resource-level --help before requiring config
+if [[ $# -ge 2 ]] && [[ "$2" == "--help" || "$2" == "-h" ]]; then
+    case "$1" in
+        issue) show_issue_help ;;
+        pr)    show_pr_help ;;
+        *)     show_usage ;;
+    esac
     exit 0
 fi
 
