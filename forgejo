@@ -4758,7 +4758,62 @@ wiki_create() {
         echo "$result" | jq -r '"Created wiki page: \(.title)"'
     fi
 }
-wiki_edit() { echo "wiki edit (pending)"; }
+wiki_edit() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: forgejo wiki edit <owner/repo> <page> [--title=X] [--content=X|--file=path|<stdin>] [--message=X]" >&2
+        exit 1
+    fi
+
+    local repo="$1"
+    local page="$2"
+    shift 2
+
+    local title message
+    title=$(get_flag "--title" "$@" 2>/dev/null) || title=""
+    message=$(get_flag "--message" "$@" 2>/dev/null) || message=""
+
+    # Resolve content only if a source was supplied; absent source leaves
+    # content unchanged. Sentinel ('x') preserves trailing newlines that
+    # $(...) would otherwise strip, and only appends on resolver success.
+    local content="" have_content=0
+    if content=$(wiki_resolve_content "$@" && printf 'x'); then
+        have_content=1
+        content=${content%x}
+    fi
+
+    if [[ -z "$title" && "$have_content" -eq 0 ]]; then
+        echo "Nothing to edit (supply --title and/or content via --content/--file/stdin)." >&2
+        exit 1
+    fi
+
+    local page_enc
+    page_enc=$(wiki_encode_page "$page")
+
+    local content_b64=""
+    if [[ "$have_content" -eq 1 ]]; then
+        content_b64=$(printf '%s' "$content" | base64 -w0)
+    fi
+
+    local body
+    body=$(jq -n \
+        --arg title "$title" \
+        --arg content "$content_b64" \
+        --arg have_content "$have_content" \
+        --arg message "$message" \
+        '{}
+          + (if $title        != "" then {title: $title}                   else {} end)
+          + (if $have_content == "1" then {content_base64: $content}       else {} end)
+          + (if $message      != "" then {message: $message}               else {} end)')
+
+    local result
+    result=$(api_call PATCH "repos/$repo/wiki/page/$page_enc" "$body")
+
+    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+        echo "$result" | jq .
+    else
+        echo "$result" | jq -r '"Updated wiki page: \(.title)"'
+    fi
+}
 wiki_delete() { echo "wiki delete (pending)"; }
 wiki_revisions() { echo "wiki revisions (pending)"; }
 
