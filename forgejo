@@ -4832,7 +4832,39 @@ wiki_delete() {
     api_call DELETE "repos/$repo/wiki/page/$page_enc" >/dev/null
     echo "Deleted wiki page: $page"
 }
-wiki_revisions() { echo "wiki revisions (pending)"; }
+wiki_revisions() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: forgejo wiki revisions <owner/repo> <page>" >&2
+        exit 1
+    fi
+
+    local repo="$1"
+    local page="$2"
+    local page_enc
+    page_enc=$(wiki_encode_page "$page")
+
+    local result
+    result=$(api_call GET "repos/$repo/wiki/revisions/$page_enc")
+
+    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+        echo "$result" | jq .
+    else
+        if echo "$result" | jq -e '(.commits // []) | length == 0' > /dev/null 2>&1; then
+            echo "No revisions found."
+        else
+            echo "$result" | jq -r '
+                ["SHA","DATE","AUTHOR","MESSAGE"],
+                (.commits[] | [
+                    (.sha[:10]),
+                    (.commit.author.date // "")[:10],
+                    (.commit.author.name // "-"),
+                    ((.commit.message // "") | gsub("\n";" "))[:50]
+                ])
+                | @tsv
+            ' | column -t -s $'\t'
+        fi
+    fi
+}
 
 # --- API PASSTHROUGH ---
 
