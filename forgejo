@@ -4659,7 +4659,34 @@ wiki_list() {
         fi
     fi
 }
-wiki_view() { echo "wiki view (pending)"; }
+wiki_view() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: forgejo wiki view <owner/repo> <page>" >&2
+        exit 1
+    fi
+
+    local repo="$1"
+    local page="$2"
+    local page_enc
+    page_enc=$(wiki_encode_page "$page")
+
+    local result
+    result=$(api_call GET "repos/$repo/wiki/page/$page_enc")
+
+    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+        echo "$result" | jq .
+    else
+        echo "$result" | jq -r '
+            "Title:    \(.title)",
+            "Updated:  \(.last_commit.author.date // "-")",
+            "Author:   \(.last_commit.author.name // "-")",
+            "Commit:   \(.last_commit.sha // "-")",
+            ""
+        '
+        # Content is base64-encoded; decode and print verbatim.
+        echo "$result" | jq -r '.content // ""' | base64 -d
+    fi
+}
 wiki_create() { echo "wiki create (pending)"; }
 wiki_edit() { echo "wiki edit (pending)"; }
 wiki_delete() { echo "wiki delete (pending)"; }
