@@ -4123,9 +4123,33 @@ pr_review_create() {
     # share one token the author and reviewer collapse to the same user, so the
     # review is rejected. The opt-in review token (a distinct account) keeps
     # author != reviewer. Unset -> falls back to FORGEJO_TOKEN (no behaviour change).
-    local result
-    result=$(FORGEJO_TOKEN="${FORGEJO_REVIEW_TOKEN:-$FORGEJO_TOKEN}" \
-        api_call POST "repos/$repo/pulls/$number/reviews" "$body")
+    #
+    # Use api_call_status (not api_call) so we can intercept a failure and, when
+    # the review identity is in play, explain that the 401/403/404 likely comes
+    # from THAT account — not FORGEJO_TOKEN. Forgejo returns 404 for private
+    # repos a user can't see, so a misconfigured review account looks like a
+    # missing PR. Without this hint the error is baffling.
+    local out status result
+    out=$(FORGEJO_TOKEN="${FORGEJO_REVIEW_TOKEN:-$FORGEJO_TOKEN}" \
+        api_call_status POST "repos/$repo/pulls/$number/reviews" "$body")
+    status=$(printf '%s' "$out" | head -1)
+    result=$(printf '%s' "$out" | tail -n +2)
+
+    if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+        echo "API error ($status):" >&2
+        printf '%s\n' "$result" | jq -r '.message // .error // .' >&2 2>/dev/null \
+            || printf '%s\n' "$result" >&2
+        if [[ -n "${FORGEJO_REVIEW_TOKEN:-}" \
+            && ( "$status" == "401" || "$status" == "403" || "$status" == "404" ) ]]; then
+            echo "" >&2
+            echo "Note: this review was submitted as the FORGEJO_REVIEW_TOKEN identity, not" >&2
+            echo "FORGEJO_TOKEN. A $status here usually means that account cannot access" >&2
+            echo "$repo (Forgejo returns 404 for repos a user can't see), or its token is" >&2
+            echo "missing scopes. Verify the review account is a collaborator/org member on" >&2
+            echo "the repo and that its token has read:user + write:repository scopes." >&2
+        fi
+        exit 1
+    fi
 
     if [[ "$JSON_OUTPUT" -eq 1 ]]; then
         echo "$result" | jq .
