@@ -4833,6 +4833,12 @@ wiki_edit() {
         exit 1
     fi
 
+    # Forgejo's wiki PATCH requires a title; omitting it renames the page to
+    # "unnamed". When the user didn't pass --title, keep the current name.
+    if [[ -z "$title" ]]; then
+        title="$page"
+    fi
+
     local page_enc
     page_enc=$(wiki_encode_page "$page")
 
@@ -4847,10 +4853,9 @@ wiki_edit() {
         --arg content "$content_b64" \
         --arg have_content "$have_content" \
         --arg message "$message" \
-        '{}
-          + (if $title        != "" then {title: $title}                   else {} end)
-          + (if $have_content == "1" then {content_base64: $content}       else {} end)
-          + (if $message      != "" then {message: $message}               else {} end)')
+        '{title: $title}
+          + (if $have_content == "1" then {content_base64: $content} else {} end)
+          + (if $message      != "" then {message: $message}        else {} end)')
 
     local result
     result=$(api_call PATCH "repos/$repo/wiki/page/$page_enc" "$body")
