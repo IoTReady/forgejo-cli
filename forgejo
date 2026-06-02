@@ -4622,7 +4622,8 @@ wiki_encode_page() {
 # Resolves wiki page content from (in precedence order) --content=, --file=,
 # or piped stdin. Prints the resolved content to stdout. Returns 1 if no
 # source was supplied at all (so callers can treat "absent" differently from
-# "empty"). Exits 1 if --file points at a non-regular file.
+# "empty"). Returns 2 if --file points at a non-regular file (the error is
+# already printed; callers must abort rather than treat it as "no source").
 #
 # Usage:
 #   if content=$(wiki_resolve_content "$@"); then ... else (no source) ... fi
@@ -4635,7 +4636,7 @@ wiki_resolve_content() {
     if file=$(get_flag "--file" "$@" 2>/dev/null); then
         if [[ ! -f "$file" ]]; then
             echo "Not a regular file: $file" >&2
-            exit 1
+            return 2
         fi
         cat "$file"
         return 0
@@ -4693,6 +4694,7 @@ Global flags:
   --json   Output raw JSON instead of formatted columns
 EOF
 }
+
 wiki_list() {
     if [[ $# -eq 0 ]]; then
         echo "Usage: forgejo wiki list <owner/repo>" >&2
@@ -4721,6 +4723,7 @@ wiki_list() {
         fi
     fi
 }
+
 wiki_view() {
     if [[ $# -lt 2 ]]; then
         echo "Usage: forgejo wiki view <owner/repo> <page>" >&2
@@ -4749,6 +4752,7 @@ wiki_view() {
         echo "$result" | jq -r '.content // ""' | base64 -d
     fi
 }
+
 wiki_create() {
     if [[ $# -eq 0 ]]; then
         echo "Usage: forgejo wiki create <owner/repo> --title=X [--content=X|--file=path|<stdin>] [--message=X]" >&2
@@ -4762,16 +4766,21 @@ wiki_create() {
     title=$(get_flag "--title" "$@" 2>/dev/null) || { echo "Missing --title" >&2; exit 1; }
     message=$(get_flag "--message" "$@" 2>/dev/null) || message=""
 
-    # Capture with a sentinel so $(...) does not strip trailing newlines
-    # (markdown bodies typically end in a newline; view must round-trip it).
+    # Capture with a sentinel so $(...) does not strip trailing newlines.
+    # rc=2 means --file pointed at a non-regular file (already reported);
+    # rc=1 means no content source was supplied.
     local rc=0
     content=$(wiki_resolve_content "$@" && printf 'x') || rc=$?
-    if [[ "$rc" -ne 0 ]]; then
+    if [[ "$rc" -eq 2 ]]; then
+        exit 1
+    elif [[ "$rc" -ne 0 ]]; then
         echo "No content supplied. Use --content=X, --file=path, or pipe via stdin (use --content='' for an empty page)." >&2
         exit 1
     fi
     content=${content%x}
 
+    # base64 here is GNU coreutils (Linux target): -w0 encodes without
+    # wrapping; -d decodes (see wiki_view).
     local content_b64
     content_b64=$(printf '%s' "$content" | base64 -w0)
 
@@ -4792,6 +4801,7 @@ wiki_create() {
         echo "$result" | jq -r '"Created wiki page: \(.title)"'
     fi
 }
+
 wiki_edit() {
     if [[ $# -lt 2 ]]; then
         echo "Usage: forgejo wiki edit <owner/repo> <page> [--title=X] [--content=X|--file=path|<stdin>] [--message=X]" >&2
@@ -4807,10 +4817,13 @@ wiki_edit() {
     message=$(get_flag "--message" "$@" 2>/dev/null) || message=""
 
     # Resolve content only if a source was supplied; absent source leaves
-    # content unchanged. Sentinel ('x') preserves trailing newlines that
-    # $(...) would otherwise strip, and only appends on resolver success.
-    local content="" have_content=0
-    if content=$(wiki_resolve_content "$@" && printf 'x'); then
+    # content unchanged. Sentinel ('x') preserves trailing newlines. rc=2
+    # means --file pointed at a non-regular file (already reported) → abort.
+    local content="" have_content=0 rc=0
+    content=$(wiki_resolve_content "$@" && printf 'x') || rc=$?
+    if [[ "$rc" -eq 2 ]]; then
+        exit 1
+    elif [[ "$rc" -eq 0 ]]; then
         have_content=1
         content=${content%x}
     fi
@@ -4848,6 +4861,7 @@ wiki_edit() {
         echo "$result" | jq -r '"Updated wiki page: \(.title)"'
     fi
 }
+
 wiki_delete() {
     if [[ $# -lt 2 ]]; then
         echo "Usage: forgejo wiki delete <owner/repo> <page> [--yes]" >&2
@@ -4866,6 +4880,7 @@ wiki_delete() {
     api_call DELETE "repos/$repo/wiki/page/$page_enc" >/dev/null
     echo "Deleted wiki page: $page"
 }
+
 wiki_revisions() {
     if [[ $# -lt 2 ]]; then
         echo "Usage: forgejo wiki revisions <owner/repo> <page>" >&2
@@ -4889,7 +4904,7 @@ wiki_revisions() {
             echo "$result" | jq -r '
                 ["SHA","DATE","AUTHOR","MESSAGE"],
                 (.commits[] | [
-                    (.sha[:10]),
+                    ((.sha // "") | .[:10]),
                     (.commit.author.date // "")[:10],
                     (.commit.author.name // "-"),
                     ((.commit.message // "") | gsub("\n";" "))[:50]
