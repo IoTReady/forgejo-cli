@@ -322,6 +322,7 @@ Resources:
   actions  CI/Actions workflow runs
   pr       Pull requests
   release  Releases and tags
+  wiki     Wiki pages
   user     Manage users (admin)
   org      Manage organizations
   admin    Server administration (cron, config)
@@ -435,6 +436,14 @@ Release commands:
   release upload-asset <owner/repo> <tag> <file>...     Upload one or more asset files (fail-fast)
   release asset list <owner/repo> <tag>                 List release assets
   release asset delete <owner/repo> <tag> <asset_id> [--yes]  Delete asset (confirms by id)
+
+Wiki commands:
+  wiki list <owner/repo>                                List wiki pages
+  wiki view <owner/repo> <page>                         View a page (decoded content)
+  wiki create <owner/repo> --title=X [--content=X|--file=path|<stdin>] [--message=X]  Create a page
+  wiki edit <owner/repo> <page> [--title=X] [--content=X|--file=path|<stdin>] [--message=X]  Edit/rename a page
+  wiki delete <owner/repo> <page> [--yes]               Delete a page (confirms by title)
+  wiki revisions <owner/repo> <page>                    Show a page's commit history
 
 User commands (admin):
   user list                                             List users
@@ -4658,7 +4667,32 @@ cmd_wiki() {
     esac
 }
 
-show_wiki_help() { echo "wiki help (pending)"; }
+show_wiki_help() {
+    cat <<'EOF'
+forgejo wiki — manage repository wiki pages
+
+Usage:
+  forgejo wiki list <owner/repo>
+  forgejo wiki view <owner/repo> <page>
+  forgejo wiki create <owner/repo> --title=X [--content=X|--file=path|<stdin>] [--message=X]
+  forgejo wiki edit <owner/repo> <page> [--title=X] [--content=X|--file=path|<stdin>] [--message=X]
+  forgejo wiki delete <owner/repo> <page> [--yes]
+  forgejo wiki revisions <owner/repo> <page>
+
+Content sources (create/edit), in precedence order:
+  --content=TEXT    inline content
+  --file=PATH       read content from a file
+  <stdin>           piped content when neither flag is given
+
+Notes:
+  - Page names may contain spaces; quote them (e.g. "Release Notes").
+  - edit requires --title and/or a content source; with neither it errors.
+  - --message sets the commit message; omitted uses the server default.
+
+Global flags:
+  --json   Output raw JSON instead of formatted columns
+EOF
+}
 wiki_list() {
     if [[ $# -eq 0 ]]; then
         echo "Usage: forgejo wiki list <owner/repo>" >&2
@@ -5879,6 +5913,7 @@ if [[ $# -ge 2 ]] && [[ "$2" == "--help" || "$2" == "-h" ]]; then
     case "$1" in
         issue) show_issue_help ;;
         pr)    show_pr_help ;;
+        wiki)  show_wiki_help ;;
         *)     show_usage ;;
     esac
     exit 0
