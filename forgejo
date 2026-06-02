@@ -4610,6 +4610,34 @@ wiki_encode_page() {
     printf '%s' "$1" | jq -sRr @uri
 }
 
+# Resolves wiki page content from (in precedence order) --content=, --file=,
+# or piped stdin. Prints the resolved content to stdout. Returns 1 if no
+# source was supplied at all (so callers can treat "absent" differently from
+# "empty"). Exits 1 if --file points at a non-regular file.
+#
+# Usage:
+#   if content=$(wiki_resolve_content "$@"); then ... else (no source) ... fi
+wiki_resolve_content() {
+    local content file
+    if content=$(get_flag "--content" "$@" 2>/dev/null); then
+        printf '%s' "$content"
+        return 0
+    fi
+    if file=$(get_flag "--file" "$@" 2>/dev/null); then
+        if [[ ! -f "$file" ]]; then
+            echo "Not a regular file: $file" >&2
+            exit 1
+        fi
+        cat "$file"
+        return 0
+    fi
+    if [[ ! -t 0 ]]; then
+        cat
+        return 0
+    fi
+    return 1
+}
+
 cmd_wiki() {
     if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
         show_wiki_help
@@ -4687,7 +4715,49 @@ wiki_view() {
         echo "$result" | jq -r '.content // ""' | base64 -d
     fi
 }
-wiki_create() { echo "wiki create (pending)"; }
+wiki_create() {
+    if [[ $# -eq 0 ]]; then
+        echo "Usage: forgejo wiki create <owner/repo> --title=X [--content=X|--file=path|<stdin>] [--message=X]" >&2
+        exit 1
+    fi
+
+    local repo="$1"
+    shift
+
+    local title message content
+    title=$(get_flag "--title" "$@" 2>/dev/null) || { echo "Missing --title" >&2; exit 1; }
+    message=$(get_flag "--message" "$@" 2>/dev/null) || message=""
+
+    # Capture with a sentinel so $(...) does not strip trailing newlines
+    # (markdown bodies typically end in a newline; view must round-trip it).
+    local rc=0
+    content=$(wiki_resolve_content "$@" && printf 'x') || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        echo "No content supplied. Use --content=X, --file=path, or pipe via stdin (use --content='' for an empty page)." >&2
+        exit 1
+    fi
+    content=${content%x}
+
+    local content_b64
+    content_b64=$(printf '%s' "$content" | base64 -w0)
+
+    local body
+    body=$(jq -n \
+        --arg title "$title" \
+        --arg content "$content_b64" \
+        --arg message "$message" \
+        '{title: $title, content_base64: $content}
+          + (if $message != "" then {message: $message} else {} end)')
+
+    local result
+    result=$(api_call POST "repos/$repo/wiki/new" "$body")
+
+    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+        echo "$result" | jq .
+    else
+        echo "$result" | jq -r '"Created wiki page: \(.title)"'
+    fi
+}
 wiki_edit() { echo "wiki edit (pending)"; }
 wiki_delete() { echo "wiki delete (pending)"; }
 wiki_revisions() { echo "wiki revisions (pending)"; }
