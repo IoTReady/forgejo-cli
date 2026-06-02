@@ -4629,11 +4629,13 @@ wiki_encode_page() {
 #   rc=0; content=$(wiki_resolve_content "$@" && printf 'x') || rc=$?
 wiki_resolve_content() {
     local content file
-    if has_flag "--content" "$@"; then
-        # get_flag emits the value via echo (one trailing newline) and $(...)
-        # would strip trailing newlines; the 'x' sentinel preserves the user's
-        # own trailing newlines, then we drop the sentinel and echo's newline.
-        content=$(get_flag "--content" "$@" 2>/dev/null; printf 'x')
+    local rc=0
+    content=$(get_flag "--content" "$@" 2>/dev/null && printf 'x') || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        # get_flag echoes the value with one trailing newline; the 'x' sentinel
+        # (only appended when get_flag succeeds, via &&) lets $(...) keep the
+        # user's own trailing newlines. Strip the sentinel, then the single
+        # newline echo added.
         content=${content%x}
         printf '%s' "${content%$'\n'}"
         return 0
