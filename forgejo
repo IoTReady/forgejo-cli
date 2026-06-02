@@ -4749,7 +4749,7 @@ wiki_view() {
             ""
         '
         # Content is base64-encoded; decode and print verbatim.
-        echo "$result" | jq -r '.content // ""' | base64 -d
+        echo "$result" | jq -r '.content_base64 // ""' | base64 -d
     fi
 }
 
@@ -4905,9 +4905,9 @@ wiki_revisions() {
                 ["SHA","DATE","AUTHOR","MESSAGE"],
                 (.commits[] | [
                     ((.sha // "") | .[:10]),
-                    (.commit.author.date // "")[:10],
-                    (.commit.author.name // "-"),
-                    ((.commit.message // "") | gsub("\n";" "))[:50]
+                    (.author.date // "")[:10],
+                    (.author.name // "-"),
+                    ((.message // "") | gsub("\n";" "))[:50]
                 ])
                 | @tsv
             ' | column -t -s $'\t'
