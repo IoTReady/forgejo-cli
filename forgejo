@@ -4842,20 +4842,24 @@ wiki_edit() {
     local page_enc
     page_enc=$(wiki_encode_page "$page")
 
-    local content_b64=""
+    local content_b64
     if [[ "$have_content" -eq 1 ]]; then
         content_b64=$(printf '%s' "$content" | base64 -w0)
+    else
+        # Rename-only edit: Forgejo's PATCH blanks content when content_base64
+        # is omitted, so fetch the current content and resend it unchanged.
+        local current
+        current=$(api_call GET "repos/$repo/wiki/page/$page_enc")
+        content_b64=$(echo "$current" | jq -r '.content_base64 // ""')
     fi
 
     local body
     body=$(jq -n \
         --arg title "$title" \
         --arg content "$content_b64" \
-        --arg have_content "$have_content" \
         --arg message "$message" \
-        '{title: $title}
-          + (if $have_content == "1" then {content_base64: $content} else {} end)
-          + (if $message      != "" then {message: $message}        else {} end)')
+        '{title: $title, content_base64: $content}
+          + (if $message != "" then {message: $message} else {} end)')
 
     local result
     result=$(api_call PATCH "repos/$repo/wiki/page/$page_enc" "$body")
