@@ -4631,7 +4631,34 @@ cmd_wiki() {
 }
 
 show_wiki_help() { echo "wiki help (pending)"; }
-wiki_list() { echo "wiki list (pending)"; }
+wiki_list() {
+    if [[ $# -eq 0 ]]; then
+        echo "Usage: forgejo wiki list <owner/repo>" >&2
+        exit 1
+    fi
+
+    local repo="$1"
+    local result
+    result=$(api_call GET "repos/$repo/wiki/pages?limit=50")
+
+    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+        echo "$result" | jq .
+    else
+        if echo "$result" | jq -e 'length == 0' > /dev/null 2>&1; then
+            echo "No wiki pages found."
+        else
+            echo "$result" | jq -r '
+                ["TITLE","UPDATED","AUTHOR"],
+                (.[] | [
+                    .title,
+                    (.last_commit.author.date // "")[:10],
+                    (.last_commit.author.name // "-")
+                ])
+                | @tsv
+            ' | column -t -s $'\t'
+        fi
+    fi
+}
 wiki_view() { echo "wiki view (pending)"; }
 wiki_create() { echo "wiki create (pending)"; }
 wiki_edit() { echo "wiki edit (pending)"; }
