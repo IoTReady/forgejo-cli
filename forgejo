@@ -4602,6 +4602,42 @@ release_asset_delete() {
     echo "Deleted asset #$asset_id"
 }
 
+# --- WIKI COMMANDS ---
+
+# URL-encodes a single path segment (wiki page titles may contain spaces and
+# other unsafe characters). Prints the encoded value to stdout.
+wiki_encode_page() {
+    printf '%s' "$1" | jq -sRr @uri
+}
+
+cmd_wiki() {
+    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+        show_wiki_help
+        exit 0
+    fi
+
+    local action="$1"
+    shift
+
+    case "$action" in
+        list)      wiki_list "$@" ;;
+        view)      wiki_view "$@" ;;
+        create)    wiki_create "$@" ;;
+        edit)      wiki_edit "$@" ;;
+        delete)    wiki_delete "$@" ;;
+        revisions) wiki_revisions "$@" ;;
+        *)         echo "Unknown wiki action: $action" >&2; exit 1 ;;
+    esac
+}
+
+show_wiki_help() { echo "wiki help (pending)"; }
+wiki_list() { echo "wiki list (pending)"; }
+wiki_view() { echo "wiki view (pending)"; }
+wiki_create() { echo "wiki create (pending)"; }
+wiki_edit() { echo "wiki edit (pending)"; }
+wiki_delete() { echo "wiki delete (pending)"; }
+wiki_revisions() { echo "wiki revisions (pending)"; }
+
 # --- API PASSTHROUGH ---
 
 # Accumulates a JSON body and/or URL query string from -f / -F / --input args.
@@ -5636,6 +5672,7 @@ case "$1" in
     actions) shift; cmd_actions "$@" ;;
     pr)      shift; cmd_pr "$@" ;;
     release) shift; cmd_release "$@" ;;
+    wiki)    shift; cmd_wiki "$@" ;;
     user)    shift; cmd_user "$@" ;;
     org)     shift; cmd_org "$@" ;;
     admin)   shift; cmd_admin "$@" ;;
