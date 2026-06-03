@@ -344,10 +344,10 @@ Repo commands:
   repo list [org]                                       List repos
   repo create <name> [--org=X] [--private] [--desc=X]  Create repo
   repo view <owner/repo>                                View repo details
-  repo edit <owner/repo> [--desc=X] [--private|--public] Edit repo
+  repo edit <owner/repo> [--name=X] [--desc=X] [--private|--public] Edit/rename repo
   repo delete <owner/repo>                              Delete repo
   repo fork <owner/repo> [--org=X]                      Fork repo (idempotent on 409)
-  repo transfer <owner/repo> --new-owner=X [--new-name=X]  Transfer repo ownership (confirms)
+  repo transfer <owner/repo> --new-owner=X               Transfer repo ownership (confirms)
   repo archive <owner/repo>                             Archive repo (idempotent)
   repo unarchive <owner/repo>                           Unarchive repo (idempotent)
   repo tags list <owner/repo>                           List tags
@@ -849,7 +849,7 @@ repo_view() {
 
 repo_edit() {
     if [[ $# -eq 0 ]]; then
-        echo "Usage: forgejo repo edit <owner/repo> [--desc=X] [--private] [--public]" >&2
+        echo "Usage: forgejo repo edit <owner/repo> [--name=X] [--desc=X] [--private] [--public]" >&2
         exit 1
     fi
 
@@ -857,6 +857,10 @@ repo_edit() {
     shift
     local body="{}"
 
+    local val
+    if val=$(get_flag "--name" "$@" 2>/dev/null); then
+        body=$(echo "$body" | jq --arg n "$val" '. + {name: $n}')
+    fi
     local desc
     if desc=$(get_flag "--desc" "$@" 2>/dev/null); then
         body=$(echo "$body" | jq --arg d "$desc" '. + {description: $d}')
@@ -866,6 +870,11 @@ repo_edit() {
     fi
     if has_flag "--public" "$@"; then
         body=$(echo "$body" | jq '. + {private: false}')
+    fi
+
+    if [[ "$body" == "{}" ]]; then
+        echo "No fields to update. Provide --name, --desc, --private, or --public." >&2
+        exit 1
     fi
 
     local result
@@ -948,25 +957,30 @@ repo_fork() {
 
 repo_transfer() {
     if [[ $# -eq 0 ]]; then
-        echo "Usage: forgejo repo transfer <owner/repo> --new-owner=X [--new-name=X]" >&2
+        echo "Usage: forgejo repo transfer <owner/repo> --new-owner=X" >&2
         exit 1
     fi
     local repo="$1"
     shift
 
     local new_owner
-    local new_name
     new_owner=$(get_flag "--new-owner" "$@" 2>/dev/null) || { echo "Missing --new-owner" >&2; exit 1; }
-    new_name=$(get_flag "--new-name" "$@" 2>/dev/null) || new_name=""
+
+    # TransferRepoOption only carries new_owner/team_ids — it cannot rename.
+    # The old --new-name was silently dropped. Reject it and point at the
+    # real way to rename, which is a separate operation after transfer.
+    if get_flag "--new-name" "$@" >/dev/null 2>&1; then
+        local repo_name="${repo#*/}"
+        echo "Transfer cannot rename a repo (the API ignores it)." >&2
+        echo "Transfer first, then rename the moved repo:" >&2
+        echo "  forgejo repo edit $new_owner/$repo_name --name=<new-name>" >&2
+        exit 1
+    fi
 
     confirm_delete "repo (transfer)" "$repo"
 
     local body
-    if [[ -n "$new_name" ]]; then
-        body=$(jq -n --arg o "$new_owner" --arg n "$new_name" '{new_owner: $o, new_repo_name: $n}')
-    else
-        body=$(jq -n --arg o "$new_owner" '{new_owner: $o}')
-    fi
+    body=$(jq -n --arg o "$new_owner" '{new_owner: $o}')
 
     local out
     local status
@@ -1565,6 +1579,24 @@ issue_create() {
         --arg body "$body_text" \
         '{title: $title, body: $body}')
 
+    # --labels was advertised in usage but never applied. CreateIssueOption
+    # accepts a labels array of IDs, so resolve names and add them.
+    local labels_str
+    if labels_str=$(get_flag "--labels" "$@" 2>/dev/null); then
+        local ids=()
+        local label_names name id
+        IFS=',' read -ra label_names <<< "$labels_str"
+        for name in "${label_names[@]}"; do
+            name=$(echo "$name" | xargs)  # trim whitespace
+            [[ -z "$name" ]] && continue
+            id=$(resolve_label_id "$repo" "$name") || exit 1
+            ids+=("$id")
+        done
+        local labels_json
+        labels_json=$(printf '%s\n' "${ids[@]}" | jq -s '.')
+        body=$(echo "$body" | jq --argjson labels "$labels_json" '. + {labels: $labels}')
+    fi
+
     local result
     result=$(api_call POST "repos/$repo/issues" "$body")
 
@@ -1635,24 +1667,45 @@ issue_edit() {
         body=$(echo "$body" | jq --arg v "$val" '. + {body: $v}')
     fi
 
-    # Handle --labels: replace all labels on the issue
+    # --labels replaces all labels on the issue. EditIssueOption has NO labels
+    # field, so a PATCH silently drops it; labels must go through the dedicated
+    # PUT /issues/{n}/labels endpoint (IssueLabelsOption), which replaces the set.
+    local labels_json=""
     if val=$(get_flag "--labels" "$@" 2>/dev/null); then
         local ids=()
+        local label_names name id
         IFS=',' read -ra label_names <<< "$val"
         for name in "${label_names[@]}"; do
             name=$(echo "$name" | xargs)  # trim whitespace
-            local id
+            [[ -z "$name" ]] && continue
             id=$(resolve_label_id "$repo" "$name") || exit 1
             ids+=("$id")
         done
-        # Forgejo PATCH /issues accepts labels array of IDs
-        local labels_json
-        labels_json=$(printf '%s\n' "${ids[@]}" | jq -s '.')
-        body=$(echo "$body" | jq --argjson labels "$labels_json" '. + {labels: $labels}')
+        # Empty array (--labels=) clears all labels.
+        if [[ ${#ids[@]} -eq 0 ]]; then
+            labels_json="[]"
+        else
+            labels_json=$(printf '%s\n' "${ids[@]}" | jq -s '.')
+        fi
     fi
 
-    local result
-    result=$(api_call PATCH "repos/$repo/issues/$number" "$body")
+    local result=""
+    # Only PATCH if there are non-label fields to change.
+    if [[ "$body" != "{}" ]]; then
+        result=$(api_call PATCH "repos/$repo/issues/$number" "$body")
+    fi
+    # Apply the label replacement via its own endpoint.
+    if [[ -n "$labels_json" ]]; then
+        api_call PUT "repos/$repo/issues/$number/labels" \
+            "$(jq -n --argjson l "$labels_json" '{labels: $l}')" > /dev/null
+    fi
+    # If nothing was changed at all, say so loudly rather than no-op silently.
+    if [[ "$body" == "{}" && -z "$labels_json" ]]; then
+        echo "No fields to update. Provide --title, --state, --body, or --labels." >&2
+        exit 1
+    fi
+    # Fetch the issue for a consistent result message when we only touched labels.
+    [[ -z "$result" ]] && result=$(api_call GET "repos/$repo/issues/$number")
 
     if [[ "$JSON_OUTPUT" -eq 1 ]]; then
         echo "$result" | jq .
@@ -2368,6 +2421,9 @@ user_create() {
     fullname=$(get_flag "--fullname" "$@" 2>/dev/null) || fullname=""
     has_flag "--admin" "$@" && is_admin="true"
 
+    # CreateUserOption has no admin field, so admin cannot be set at creation
+    # time. We create the user first, then promote via a follow-up PATCH
+    # (the same call `user edit --admin=true` makes).
     local body
     body=$(jq -n \
         --arg login "$login" \
@@ -2375,7 +2431,6 @@ user_create() {
         --arg password "$password" \
         --arg fullname "$fullname" \
         --argjson must_change "$must_change" \
-        --argjson is_admin "$is_admin" \
         '{
             username: $login,
             email: $email,
@@ -2385,15 +2440,28 @@ user_create() {
             login_name: $login,
             source_id: 0,
             visibility: "public"
-        } | if $is_admin then . + {site_admin: true} else . end')
+        }')
 
     local result
     result=$(api_call POST "admin/users" "$body")
+
+    if [[ "$is_admin" == "true" ]]; then
+        # Promote in a second call. If this fails, the user still exists —
+        # surface the gap loudly rather than reporting a non-admin as admin.
+        local promote
+        promote=$(jq -n '{login_name: $l, source_id: 0, admin: true}' --arg l "$login")
+        if ! api_call PATCH "admin/users/$login" "$promote" > /dev/null 2>&1; then
+            echo "User '$login' created, but granting admin failed." >&2
+            echo "Retry with: forgejo user edit $login --admin=true" >&2
+            exit 1
+        fi
+    fi
 
     if [[ "$JSON_OUTPUT" -eq 1 ]]; then
         echo "$result" | jq .
     else
         echo "$result" | jq -r '"Created user: \(.login) (\(.email))"'
+        [[ "$is_admin" == "true" ]] && echo "Granted site admin."
     fi
 }
 
@@ -2446,10 +2514,12 @@ user_edit() {
         body=$(echo "$body" | jq --arg v "$val" '. + {email: $v}')
     fi
     if val=$(get_flag "--admin" "$@" 2>/dev/null); then
+        # EditUserOption's field is `admin`, not `site_admin`; the wrong name
+        # was silently dropped, so --admin never changed anything.
         if [[ "$val" == "true" ]]; then
-            body=$(echo "$body" | jq '. + {site_admin: true}')
+            body=$(echo "$body" | jq '. + {admin: true}')
         else
-            body=$(echo "$body" | jq '. + {site_admin: false}')
+            body=$(echo "$body" | jq '. + {admin: false}')
         fi
     fi
     if val=$(get_flag "--active" "$@" 2>/dev/null); then
@@ -3846,9 +3916,35 @@ pr_ready() {
     local repo="$1"
     local number="$2"
 
-    local body
-    body=$(jq -n '{draft: false}')
-    api_call PATCH "repos/$repo/pulls/$number" "$body" > /dev/null
+    # EditPullRequestOption has no `draft` field, so PATCH {draft:false} was
+    # silently dropped. Forgejo derives draft state from a WIP title prefix;
+    # clearing draft means stripping that prefix from the title.
+    local pr title is_draft
+    pr=$(api_call GET "repos/$repo/pulls/$number")
+    is_draft=$(echo "$pr" | jq -r '.draft')
+    title=$(echo "$pr" | jq -r '.title')
+
+    if [[ "$is_draft" != "true" ]]; then
+        echo "PR #$number is not a draft; nothing to do." >&2
+        exit 1
+    fi
+
+    # Strip a leading WIP prefix (Forgejo defaults: "WIP:", "[WIP]"),
+    # case-insensitive, along with following whitespace.
+    local new_title
+    new_title=$(echo "$title" | sed -E 's/^[[:space:]]*(\[WIP\]|WIP:)[[:space:]]*//I')
+
+    if [[ "$new_title" == "$title" ]]; then
+        # Draft, but the prefix isn't one we recognise — likely a custom
+        # work_in_progress_prefix on this instance. Point at the real fix.
+        echo "PR #$number is a draft but its title has no recognised WIP prefix" >&2
+        echo "(this instance may use a custom prefix). Remove it manually:" >&2
+        echo "  forgejo pr edit $repo $number --title=\"<title without WIP prefix>\"" >&2
+        exit 1
+    fi
+
+    api_call PATCH "repos/$repo/pulls/$number" \
+        "$(jq -n --arg t "$new_title" '{title: $t}')" > /dev/null
     echo "Marked PR #$number ready for review"
 }
 
