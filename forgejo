@@ -513,6 +513,29 @@ Search commands:
 USAGE
 }
 
+# Show the most specific help available for the given args, then return.
+# Called from MAIN whenever --help/-h appears anywhere in the argument list,
+# so it must never run a command — only print help. Falls back to the
+# top-level usage for resources that have no dedicated help function.
+route_help() {
+    case "${1:-}" in
+        issue)
+            case "${2:-}" in
+                comment) show_issue_comment_help ;;
+                *)       show_issue_help ;;
+            esac
+            ;;
+        pr)
+            case "${2:-}" in
+                comment) show_pr_comment_help ;;
+                *)       show_pr_help ;;
+            esac
+            ;;
+        wiki) show_wiki_help ;;
+        *)    show_usage ;;
+    esac
+}
+
 
 # --- RESOURCE-SPECIFIC HELP FUNCTIONS ---
 
@@ -6030,21 +6053,23 @@ for arg in "$@"; do
 done
 set -- "${args[@]+"${args[@]}"}"
 
-if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+if [[ $# -eq 0 ]]; then
     show_usage
     exit 0
 fi
 
-# Handle resource-level --help before requiring config
-if [[ $# -ge 2 ]] && [[ "$2" == "--help" || "$2" == "-h" ]]; then
-    case "$1" in
-        issue) show_issue_help ;;
-        pr)    show_pr_help ;;
-        wiki)  show_wiki_help ;;
-        *)     show_usage ;;
-    esac
-    exit 0
-fi
+# --help / -h ANYWHERE means "show help, never run a command". This MUST run
+# before load_config and before any dispatch so that a mutating verb can never
+# treat --help as a positional argument. Without this, `forgejo repo create
+# --help` would create a repo literally named "--help", and `forgejo repo
+# delete --help` would try to delete one. route_help shows the most specific
+# help available for the resource/subcommand named in the args.
+for arg in "$@"; do
+    if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+        route_help "$@"
+        exit 0
+    fi
+done
 
 if [[ "${1:-}" == "auth" && "${2:-}" == "login" ]]; then
     shift 2
