@@ -423,6 +423,7 @@ PR commands:
   pr checks <owner/repo> <number>                       Commit statuses + Actions runs
   pr review <owner/repo> <number> --approve|--request-changes|--comment [--body=X]   Submit review
   pr review list <owner/repo> <number>                  List reviews
+  pr review lookup <owner/repo> <number>                Unified reviews + comments (JSON)
   pr review dismiss <owner/repo> <number> <review_id> --message=X   Dismiss a review
   pr requested-reviewers add <owner/repo> <number> --users=u1,u2     Request reviewers
   pr requested-reviewers remove <owner/repo> <number> --users=u1,u2  Withdraw reviewer requests
@@ -694,6 +695,10 @@ Pull request commands:
 
   pr review list <owner/repo> <number>
       List all reviews on a PR.
+
+  pr review lookup <owner/repo> <number>
+      Unified JSON output: all reviews, review comments, and PR comments with
+      a "type" field ("review", "review_comment", "comment").
 
   pr review dismiss <owner/repo> <number> <review_id> --message=TEXT
       Dismiss a previous review by its ID.
@@ -4179,6 +4184,11 @@ PR review commands:
   forgejo pr review list <owner/repo> <number>
       List all reviews on a PR (ID, user, state, date).
 
+  forgejo pr review lookup <owner/repo> <number>
+      Fetch all reviews, review comments, and PR comments merged into one JSON
+      array. Each item has a "type" field: "review", "review_comment", or "comment".
+      Always outputs JSON (--json is implied).
+
   forgejo pr review dismiss <owner/repo> <number> <review_id> --message=TEXT
       Dismiss a previous review by its ID. --message is REQUIRED.
 
@@ -4190,6 +4200,7 @@ EXAMPLES:
   forgejo pr review myorg/myrepo 17 --request-changes --body="Please add tests."
   forgejo pr review myorg/myrepo 17 --comment --body="One nit: rename the variable."
   forgejo pr review list myorg/myrepo 17
+  forgejo pr review lookup myorg/myrepo 17
   forgejo pr review dismiss myorg/myrepo 17 42 --message="Stale review"
 
 REVIEW_HELP
@@ -4199,6 +4210,7 @@ REVIEW_HELP
     case "$1" in
         list)    shift; pr_review_list "$@" ;;
         dismiss) shift; pr_review_dismiss "$@" ;;
+        lookup)  shift; pr_review_lookup "$@" ;;
         *)       pr_review_create "$@" ;;
     esac
 }
@@ -4318,6 +4330,28 @@ pr_review_list() {
             ' | column -t -s $'\t'
         fi
     fi
+}
+
+pr_review_lookup() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: forgejo pr review lookup <owner/repo> <number>" >&2
+        exit 1
+    fi
+    local repo="$1"
+    local number="$2"
+
+    local reviews comments
+    reviews=$(api_call GET "repos/$repo/pulls/$number/reviews")
+    comments=$(api_call GET "repos/$repo/issues/$number/comments")
+
+    jq -n \
+        --argjson reviews "$reviews" \
+        --argjson comments "$comments" \
+        '[
+            ($reviews[] | .type = "review"),
+            ($reviews[].comments[]? | .type = "review_comment"),
+            ($comments[] | .type = "comment")
+        ]'
 }
 
 pr_review_dismiss() {
