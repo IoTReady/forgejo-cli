@@ -3858,38 +3858,45 @@ pr_view() {
         exit 1
     fi
 
-    local repo="$1"
-    local number="$2"
-
-    local result
-    result=$(api_call GET "repos/$repo/pulls/$number")
+    local repo="$1" number="$2"
+    local conv
+    conv=$(pr_conversation_json "$repo" "$number")
 
     if [[ "$JSON_OUTPUT" -eq 1 ]]; then
-        echo "$result" | jq .
-    else
-        echo "$result" | jq -r '
-            "#\(.number): \(.title)",
-            "State:      \(.state)",
-            "Author:     \(.user.login)",
-            "Base:       \(.base.ref) ← Head: \(.head.ref)",
-            "Mergeable:  \(.mergeable // "-")",
-            "Created:    \(.created_at[:10])",
-            "Updated:    \(.updated_at[:10])",
-            "Labels:     \(if (.labels | length) > 0 then ([.labels[].name] | join(", ")) else "-" end)",
-            "",
-            (.body // "(no body)")
-        '
-
-        echo ""
-        echo "--- Reviews ---"
-        local reviews
-        reviews=$(api_call GET "repos/$repo/pulls/$number/reviews")
-        echo "$reviews" | jq -r '
-            if length == 0 then "No reviews."
-            else .[] | "  \(.user.login): \(.state) (\(.submitted_at[:10] // "-"))"
-            end
-        '
+        echo "$conv" | jq .
+        return
     fi
+
+    echo "$conv" | jq -r '
+        "#\(.number): \(.title)",
+        "State:      \(.state)",
+        "Author:     \(.user.login)",
+        "Base:       \(.base.ref) ← Head: \(.head.ref)",
+        "Mergeable:  \(.mergeable // "-")",
+        "Created:    \(.created_at[:10])",
+        "Updated:    \(.updated_at[:10])",
+        "Labels:     \(if (.labels | length) > 0 then ([.labels[].name] | join(", ")) else "-" end)",
+        "",
+        (.body // "(no body)")
+    '
+
+    echo ""
+    echo "--- Reviews ---"
+    echo "$conv" | jq -r '
+        if (.reviews | length) == 0 then "No reviews."
+        else .reviews[] |
+            "  \(.user.login): \(.state) (\((.submitted_at // "-")[:10]))",
+            (.comments[]? | "      \(.path):\(.position // .original_position // "?") — \(.body)")
+        end
+    '
+
+    echo ""
+    echo "--- Comments ---"
+    echo "$conv" | jq -r '
+        if (.comments | length) == 0 then "No comments."
+        else .comments[] | "  \(.user.login) (\(.created_at[:10])): \(.body)"
+        end
+    '
 }
 
 pr_merge() {
