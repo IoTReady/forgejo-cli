@@ -657,7 +657,7 @@ Pull request commands:
       View a PR with full conversation: details, all reviews, inline
       review-thread comments, and general comments. Use --json for the
       complete machine-readable object (pull fields plus .reviews[] with
-      nested .comments[] and top-level .comments[]).
+      nested .comments[] and top-level .issue_comments[]).
 
   pr merge <owner/repo> <number> [--method=merge|rebase|squash]
       Merge a PR.
@@ -3828,21 +3828,23 @@ pr_create() {
 
 # Assemble the complete PR conversation as one JSON object: the pull object
 # plus additive top-level keys .reviews (each with its own inline .comments[])
-# and .comments (general issue comments). The reviews LIST endpoint does not
-# embed each review's inline comments, so we fetch them per review id — this
-# is what makes inline review threads visible without dropping to raw REST.
+# and .issue_comments (general issue comments). The native .comments field on
+# the pull object is an integer count and must not be overwritten. The reviews
+# LIST endpoint does not embed each review's inline comments, so we fetch them
+# per review id — this is what makes inline review threads visible without
+# dropping to raw REST.
 pr_conversation_json() {
     local repo="$1" number="$2"
     local pull reviews comments
     pull=$(api_call GET "repos/$repo/pulls/$number")
-    reviews=$(api_call GET "repos/$repo/pulls/$number/reviews")
-    comments=$(api_call GET "repos/$repo/issues/$number/comments")
+    reviews=$(api_call GET "repos/$repo/pulls/$number/reviews?limit=50")
+    comments=$(api_call GET "repos/$repo/issues/$number/comments?limit=50")
 
     # Build a map of review id -> its inline comments.
     local map='{}' rid rc
     while IFS= read -r rid; do
         [[ -z "$rid" ]] && continue
-        rc=$(api_call GET "repos/$repo/pulls/$number/reviews/$rid/comments")
+        rc=$(api_call GET "repos/$repo/pulls/$number/reviews/$rid/comments?limit=50")
         map=$(jq -n --argjson m "$map" --arg id "$rid" --argjson c "$rc" \
             '$m + {($id): $c}')
     done < <(echo "$reviews" | jq -r '.[].id')
@@ -3852,7 +3854,7 @@ pr_conversation_json() {
 
     jq -n --argjson pull "$pull" --argjson reviews "$reviews" \
         --argjson comments "$comments" \
-        '$pull + {reviews: $reviews, comments: $comments}'
+        '$pull + {reviews: $reviews, issue_comments: $comments}'
 }
 
 pr_view() {
@@ -3888,7 +3890,7 @@ pr_view() {
     echo "$conv" | jq -r '
         if (.reviews | length) == 0 then "No reviews."
         else .reviews[] |
-            "  \(.user.login): \(.state) (\((.submitted_at // "-")[:10]))",
+            "  \(.user.login): \(.state) (\(if (.submitted_at // "") == "" then "-" else .submitted_at[:10] end))",
             (.comments[]? | "      \(.path):\(.position // .original_position // "?") — \(.body)")
         end
     '
@@ -3896,8 +3898,8 @@ pr_view() {
     echo ""
     echo "--- Comments ---"
     echo "$conv" | jq -r '
-        if (.comments | length) == 0 then "No comments."
-        else .comments[] | "  \(.user.login) (\(.created_at[:10])): \(.body)"
+        if (.issue_comments | length) == 0 then "No comments."
+        else .issue_comments[] | "  \(.user.login) (\(.created_at[:10])): \(.body)"
         end
     '
 }
@@ -4383,7 +4385,7 @@ pr_review_lookup() {
     echo "$conv" | jq '[
         (.reviews[]           | del(.comments) | .type = "review"),
         (.reviews[].comments[]?               | .type = "review_comment"),
-        (.comments[]                          | .type = "comment")
+        (.issue_comments[]                    | .type = "comment")
     ]'
 }
 
