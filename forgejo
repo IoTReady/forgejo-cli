@@ -717,9 +717,10 @@ Pull request commands:
   pr checks <owner/repo> <number>
       Show commit statuses and Actions CI runs for the PR's head commit.
 
-  pr review <owner/repo> <number> --approve|--request-changes|--comment [--body=TEXT]
+  pr review <owner/repo> <number> --approve|--request-changes|--comment [--body=TEXT] [--comments=FILE|-]
       Submit a PR review. Exactly one of --approve, --request-changes, --comment
       is required. --body is required with --request-changes and --comment.
+      --comments attaches inline line-level review comments.
 
   pr review list <owner/repo> <number>
       List all reviews on a PR.
@@ -4247,6 +4248,12 @@ PR review commands:
   forgejo pr review <owner/repo> <number> --comment --body=TEXT
       Leave a general review comment. --body is REQUIRED.
 
+  --comments=FILE|-   Attach inline (line-level) comments to the review.
+                      FILE is a JSON array [{"path":"f","line":N,"body":"text"}];
+                      "-" reads the array from stdin. Works with any of
+                      --approve/--request-changes/--comment. With --comment,
+                      --body becomes optional when --comments is supplied.
+
   forgejo pr review list <owner/repo> <number>
       List all reviews on a PR (ID, user, state, date).
 
@@ -4265,6 +4272,7 @@ EXAMPLES:
   forgejo pr review myorg/myrepo 17 --approve
   forgejo pr review myorg/myrepo 17 --request-changes --body="Please add tests."
   forgejo pr review myorg/myrepo 17 --comment --body="One nit: rename the variable."
+  forgejo pr review myorg/myrepo 17 --comment --comments=review.json
   forgejo pr review list myorg/myrepo 17
   forgejo pr review lookup myorg/myrepo 17
   forgejo pr review dismiss myorg/myrepo 17 42 --message="Stale review"
@@ -4308,20 +4316,52 @@ pr_review_create() {
     local body_text=""
     body_text=$(get_flag "--body" "$@" 2>/dev/null) || body_text=""
 
+    # Optional inline (line-level) review comments: --comments=FILE|-  (JSON
+    # array [{path,line,body}]). Each maps to the API's {path,new_position,body}.
+    local comments_json="" comments_src=""
+    if comments_src=$(get_flag "--comments" "$@" 2>/dev/null); then
+        local raw
+        if [[ "$comments_src" == "-" ]]; then
+            raw=$(cat)
+        elif [[ -f "$comments_src" ]]; then
+            raw=$(cat "$comments_src")
+        else
+            echo "--comments: file not found: $comments_src" >&2
+            exit 1
+        fi
+        if ! printf '%s' "$raw" | jq -e '
+            if type != "array" then error("comments must be a JSON array")
+            elif length == 0 then error("comments array is empty")
+            elif any(.[]; (.path|type)!="string" or (.path=="")
+                         or (.line|type)!="number"
+                         or (.body|type)!="string" or (.body=="")) then
+                error("each comment needs non-empty path (string), line (number), body (string)")
+            else . end' >/dev/null 2>&1; then
+            echo "--comments: invalid JSON. Expected a non-empty array of" >&2
+            echo "{\"path\":\"file\",\"line\":N,\"body\":\"text\"} objects." >&2
+            exit 1
+        fi
+        comments_json=$(printf '%s' "$raw" | jq -c \
+            '[ .[] | {path: .path, new_position: .line, body: .body} ]')
+    fi
+
     if [[ "$event" == "REQUEST_CHANGES" && -z "$body_text" ]]; then
         echo "--body required with --request-changes" >&2
         exit 1
     fi
-    if [[ "$event" == "COMMENT" && -z "$body_text" ]]; then
-        echo "--body required with --comment" >&2
+    # --comment normally needs a body, but inline comments can stand alone.
+    if [[ "$event" == "COMMENT" && -z "$body_text" && -z "$comments_json" ]]; then
+        echo "--body required with --comment (or supply --comments=FILE)" >&2
         exit 1
     fi
 
     local body
+    body=$(jq -n --arg e "$event" '{event: $e}')
     if [[ -n "$body_text" ]]; then
-        body=$(jq -n --arg e "$event" --arg b "$body_text" '{event: $e, body: $b}')
-    else
-        body=$(jq -n --arg e "$event" '{event: $e}')
+        body=$(printf '%s' "$body" | jq --arg b "$body_text" '. + {body: $b}')
+    fi
+    if [[ -n "$comments_json" ]]; then
+        body=$(printf '%s' "$body" | jq --argjson c "$comments_json" '. + {comments: $c}')
     fi
 
     # Submit the review under a separate identity when FORGEJO_REVIEW_TOKEN is
