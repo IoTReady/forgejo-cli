@@ -654,7 +654,10 @@ Pull request commands:
       Create a new PR.
 
   pr view <owner/repo> <number>
-      View PR details with review summaries.
+      View a PR with full conversation: details, all reviews, inline
+      review-thread comments, and general comments. Use --json for the
+      complete machine-readable object (pull fields plus .reviews[] with
+      nested .comments[] and top-level .comments[]).
 
   pr merge <owner/repo> <number> [--method=merge|rebase|squash]
       Merge a PR.
