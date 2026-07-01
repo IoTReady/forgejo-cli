@@ -4373,21 +4373,15 @@ pr_review_lookup() {
         echo "Usage: forgejo pr review lookup <owner/repo> <number>" >&2
         exit 1
     fi
-    local repo="$1"
-    local number="$2"
+    local repo="$1" number="$2"
+    local conv
+    conv=$(pr_conversation_json "$repo" "$number")
 
-    local reviews comments
-    reviews=$(api_call GET "repos/$repo/pulls/$number/reviews")
-    comments=$(api_call GET "repos/$repo/issues/$number/comments")
-
-    jq -n \
-        --argjson reviews "$reviews" \
-        --argjson comments "$comments" \
-        '[
-            ($reviews[] | .type = "review"),
-            ($reviews[].comments[]? | .type = "review_comment"),
-            ($comments[] | .type = "comment")
-        ]'
+    echo "$conv" | jq '[
+        (.reviews[]           | del(.comments) | .type = "review"),
+        (.reviews[].comments[]?               | .type = "review_comment"),
+        (.comments[]                          | .type = "comment")
+    ]'
 }
 
 pr_review_dismiss() {
