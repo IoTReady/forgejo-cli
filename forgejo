@@ -168,25 +168,34 @@ api_call_raw() {
     rm -f "$tmp"
 }
 
-# Paginated GET. Forgejo caps list endpoints at 50 items/page; a single
-# api_call silently returns only the first page. This fetches every page
-# (limit=50, page=1,2,…) and prints one merged JSON array. The endpoint may
-# already carry a query string, so we choose ? or & accordingly. Stops at the
-# first short page (<50). Caps at 200 pages (10 000 items) so a bug can't spin
-# forever; hitting the cap warns rather than silently truncating.
+# Paginated GET for list endpoints. A single api_call may return only the
+# first page. This fetches pages (limit=50, page=1,2,…), merges them, and
+# prints one JSON array. Termination is by NEW items contributed, deduped by
+# .id: this is robust both when the server paginates correctly (a trailing
+# short/empty page adds nothing) AND when the server ignores ?page= and
+# re-returns the same set (page 2 adds nothing new → stop). List items on the
+# endpoints this serves (reviews, comments, review comments) all carry a
+# unique .id. Caps at 200 pages so a misbehaving server can't spin forever.
 api_call_paged() {
     local method="$1" endpoint="$2"
     local sep='?'
     [[ "$endpoint" == *\?* ]] && sep='&'
-    local page=1 acc='[]' pagejson count
+    local page=1 acc='[]' pagejson merged prevlen newlen pagelen
     while :; do
         pagejson=$(api_call "$method" "${endpoint}${sep}limit=50&page=${page}")
-        count=$(echo "$pagejson" | jq 'length')
-        acc=$(jq -n --argjson a "$acc" --argjson b "$pagejson" '$a + $b')
-        [[ "$count" -lt 50 ]] && break
+        pagelen=$(echo "$pagejson" | jq 'length')
+        prevlen=$(echo "$acc" | jq 'length')
+        merged=$(jq -n --argjson a "$acc" --argjson b "$pagejson" \
+            '($a + $b) | unique_by(.id)')
+        newlen=$(echo "$merged" | jq 'length')
+        acc="$merged"
+        # No new items this page (empty tail page, or server ignored ?page=).
+        [[ "$newlen" -eq "$prevlen" ]] && break
+        # Normal last page: fewer than a full page returned.
+        [[ "$pagelen" -lt 50 ]] && break
         page=$((page+1))
         if [[ "$page" -gt 200 ]]; then
-            echo "forgejo: warning: >10000 items at $endpoint; truncated at 200 pages" >&2
+            echo "forgejo: warning: pagination cap (200 pages) hit at $endpoint" >&2
             break
         fi
     done
