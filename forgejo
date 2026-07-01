@@ -168,6 +168,31 @@ api_call_raw() {
     rm -f "$tmp"
 }
 
+# Paginated GET. Forgejo caps list endpoints at 50 items/page; a single
+# api_call silently returns only the first page. This fetches every page
+# (limit=50, page=1,2,…) and prints one merged JSON array. The endpoint may
+# already carry a query string, so we choose ? or & accordingly. Stops at the
+# first short page (<50). Caps at 200 pages (10 000 items) so a bug can't spin
+# forever; hitting the cap warns rather than silently truncating.
+api_call_paged() {
+    local method="$1" endpoint="$2"
+    local sep='?'
+    [[ "$endpoint" == *\?* ]] && sep='&'
+    local page=1 acc='[]' pagejson count
+    while :; do
+        pagejson=$(api_call "$method" "${endpoint}${sep}limit=50&page=${page}")
+        count=$(echo "$pagejson" | jq 'length')
+        acc=$(jq -n --argjson a "$acc" --argjson b "$pagejson" '$a + $b')
+        [[ "$count" -lt 50 ]] && break
+        page=$((page+1))
+        if [[ "$page" -gt 200 ]]; then
+            echo "forgejo: warning: >10000 items at $endpoint; truncated at 200 pages" >&2
+            break
+        fi
+    done
+    echo "$acc"
+}
+
 # Like api_call but authenticates with HTTP Basic (username + FORGEJO_PASSWORD)
 # instead of bearer token. Required for /users/{u}/tokens endpoints, which
 # Forgejo does not allow over bearer auth. Exits with a setup hint if
@@ -3837,14 +3862,14 @@ pr_conversation_json() {
     local repo="$1" number="$2"
     local pull reviews comments
     pull=$(api_call GET "repos/$repo/pulls/$number")
-    reviews=$(api_call GET "repos/$repo/pulls/$number/reviews?limit=50")
-    comments=$(api_call GET "repos/$repo/issues/$number/comments?limit=50")
+    reviews=$(api_call_paged GET "repos/$repo/pulls/$number/reviews")
+    comments=$(api_call_paged GET "repos/$repo/issues/$number/comments")
 
     # Build a map of review id -> its inline comments.
     local map='{}' rid rc
     while IFS= read -r rid; do
         [[ -z "$rid" ]] && continue
-        rc=$(api_call GET "repos/$repo/pulls/$number/reviews/$rid/comments?limit=50")
+        rc=$(api_call_paged GET "repos/$repo/pulls/$number/reviews/$rid/comments")
         map=$(jq -n --argjson m "$map" --arg id "$rid" --argjson c "$rc" \
             '$m + {($id): $c}')
     done < <(echo "$reviews" | jq -r '.[].id')
