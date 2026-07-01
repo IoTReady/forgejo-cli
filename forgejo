@@ -3823,6 +3823,35 @@ pr_create() {
     fi
 }
 
+# Assemble the complete PR conversation as one JSON object: the pull object
+# plus additive top-level keys .reviews (each with its own inline .comments[])
+# and .comments (general issue comments). The reviews LIST endpoint does not
+# embed each review's inline comments, so we fetch them per review id — this
+# is what makes inline review threads visible without dropping to raw REST.
+pr_conversation_json() {
+    local repo="$1" number="$2"
+    local pull reviews comments
+    pull=$(api_call GET "repos/$repo/pulls/$number")
+    reviews=$(api_call GET "repos/$repo/pulls/$number/reviews")
+    comments=$(api_call GET "repos/$repo/issues/$number/comments")
+
+    # Build a map of review id -> its inline comments.
+    local map='{}' rid rc
+    while IFS= read -r rid; do
+        [[ -z "$rid" ]] && continue
+        rc=$(api_call GET "repos/$repo/pulls/$number/reviews/$rid/comments")
+        map=$(jq -n --argjson m "$map" --arg id "$rid" --argjson c "$rc" \
+            '$m + {($id): $c}')
+    done < <(echo "$reviews" | jq -r '.[].id')
+
+    reviews=$(echo "$reviews" | jq --argjson map "$map" \
+        '[ .[] | .comments = ($map[(.id|tostring)] // []) ]')
+
+    jq -n --argjson pull "$pull" --argjson reviews "$reviews" \
+        --argjson comments "$comments" \
+        '$pull + {reviews: $reviews, comments: $comments}'
+}
+
 pr_view() {
     if [[ $# -lt 2 ]]; then
         echo "Usage: forgejo pr view <owner/repo> <number>" >&2
