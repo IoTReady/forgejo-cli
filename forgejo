@@ -634,6 +634,11 @@ Issue commands:
   issue label <owner/repo> remove <number> --label=TEXT
       Remove a single label from an issue.
 
+  issue images <owner/repo> <number> [--output=DIR]
+      Download all image attachments (body + comments) to DIR.
+      DIR defaults to ./issue-<number>-images/. Non-image attachments
+      (extension not in .png .jpg .jpeg .gif .webp .svg .bmp) are skipped.
+
 EXAMPLES:
   forgejo issue create myorg/myrepo --title="Fix auth" --body="The OAuth flow is broken."
   forgejo issue comment myorg/myrepo 42 --body="I can reproduce this on staging."
@@ -1596,6 +1601,7 @@ cmd_issue() {
         unassign)   issue_unassign "$@" ;;
         search)     issue_search "$@" ;;
         milestone)  issue_milestone "$@" ;;
+        images)     issue_images "$@" ;;
         *)       echo "Unknown issue action: $action" >&2; exit 1 ;;
     esac
 }
@@ -2229,6 +2235,76 @@ MILESTONE_HELP
         set)    milestone_set "$@" ;;
         *)      echo "Unknown milestone action: $action" >&2; exit 1 ;;
     esac
+}
+
+issue_images() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: forgejo issue images <owner/repo> <number> [--output=DIR]" >&2
+        exit 1
+    fi
+
+    local repo="$1"
+    local number="$2"
+    shift 2
+
+    local outdir
+    outdir=$(get_flag "--output" "$@" 2>/dev/null) || outdir="issue-${number}-images"
+
+    local assets
+    assets=$(api_call GET "repos/$repo/issues/$number/assets")
+
+    local images
+    images=$(echo "$assets" | jq '[.[] | select(.name | test("\\.(png|jpe?g|gif|webp|svg|bmp)$"; "i"))]')
+
+    local count
+    count=$(echo "$images" | jq 'length')
+
+    if [[ "$count" -eq 0 ]]; then
+        if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+            echo "[]"
+        else
+            echo "No image attachments found."
+        fi
+        return 0
+    fi
+
+    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+        echo "$images" | jq .
+        return 0
+    fi
+
+    mkdir -p "$outdir"
+
+    local -A seen_names=()
+    local failed=0
+    local i name url uuid8 dest size
+
+    for i in $(seq 0 $((count - 1))); do
+        name=$(echo "$images" | jq -r ".[$i].name")
+        url=$(echo "$images" | jq -r ".[$i].browser_download_url")
+        uuid8=$(echo "$images" | jq -r ".[$i].uuid" | cut -c1-8)
+        size=$(echo "$images" | jq -r ".[$i].size")
+
+        if [[ -n "${seen_names[$name]+x}" ]]; then
+            dest="$outdir/${uuid8}-${name}"
+        else
+            dest="$outdir/$name"
+        fi
+        seen_names[$name]=1
+
+        if curl -s -f -X GET \
+            -H "Authorization: token $FORGEJO_TOKEN" \
+            -o "$dest" \
+            "$url"; then
+            echo "$name ($size bytes) -> $dest"
+        else
+            echo "forgejo: failed to download $name from $url" >&2
+            failed=1
+        fi
+    done
+
+    [[ "$failed" -eq 1 ]] && exit 1
+    return 0
 }
 
 milestone_list() {
