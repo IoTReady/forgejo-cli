@@ -2253,6 +2253,16 @@ issue_images() {
     local assets
     assets=$(api_call_paged GET "repos/$repo/issues/$number/assets")
 
+    local comments comment_ids comment_id comment_assets
+    comments=$(api_call_paged GET "repos/$repo/issues/$number/comments")
+    comment_ids=$(echo "$comments" | jq -r '.[].id')
+    if [[ -n "$comment_ids" ]]; then
+        while IFS= read -r comment_id; do
+            comment_assets=$(api_call_paged GET "repos/$repo/issues/comments/$comment_id/assets")
+            assets=$(jq -n --argjson a "$assets" --argjson b "$comment_assets" '$a + $b')
+        done <<< "$comment_ids"
+    fi
+
     local images
     images=$(echo "$assets" | jq '[.[] | select(.name | test("\\.(png|jpe?g|gif|webp|svg|bmp)$"; "i"))]')
 
