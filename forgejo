@@ -2251,7 +2251,7 @@ issue_images() {
     outdir=$(get_flag "--output" "$@" 2>/dev/null) || outdir="issue-${number}-images"
 
     local assets
-    assets=$(api_call GET "repos/$repo/issues/$number/assets")
+    assets=$(api_call_paged GET "repos/$repo/issues/$number/assets")
 
     local images
     images=$(echo "$assets" | jq '[.[] | select(.name | test("\\.(png|jpe?g|gif|webp|svg|bmp)$"; "i"))]')
@@ -2260,11 +2260,7 @@ issue_images() {
     count=$(echo "$images" | jq 'length')
 
     if [[ "$count" -eq 0 ]]; then
-        if [[ "$JSON_OUTPUT" -eq 1 ]]; then
-            echo "[]"
-        else
-            echo "No image attachments found."
-        fi
+        echo "No image attachments found."
         return 0
     fi
 
@@ -2281,6 +2277,7 @@ issue_images() {
 
     for i in $(seq 0 $((count - 1))); do
         name=$(echo "$images" | jq -r ".[$i].name")
+        name=$(basename -- "$name")
         url=$(echo "$images" | jq -r ".[$i].browser_download_url")
         uuid8=$(echo "$images" | jq -r ".[$i].uuid" | cut -c1-8)
         size=$(echo "$images" | jq -r ".[$i].size")
@@ -2292,12 +2289,13 @@ issue_images() {
         fi
         seen_names[$name]=1
 
-        if curl -s -f -X GET \
+        if curl -s -f -L -X GET \
             -H "Authorization: token $FORGEJO_TOKEN" \
             -o "$dest" \
             "$url"; then
             echo "$name ($size bytes) -> $dest"
         else
+            rm -f "$dest"
             echo "forgejo: failed to download $name from $url" >&2
             failed=1
         fi
