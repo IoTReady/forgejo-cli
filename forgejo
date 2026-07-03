@@ -2269,13 +2269,13 @@ issue_images() {
     local count
     count=$(echo "$images" | jq 'length')
 
-    if [[ "$count" -eq 0 ]]; then
-        echo "No image attachments found."
+    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+        echo "$images" | jq .
         return 0
     fi
 
-    if [[ "$JSON_OUTPUT" -eq 1 ]]; then
-        echo "$images" | jq .
+    if [[ "$count" -eq 0 ]]; then
+        echo "No image attachments found."
         return 0
     fi
 
